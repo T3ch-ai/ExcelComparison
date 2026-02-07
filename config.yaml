@@ -1,0 +1,198 @@
+# ============================================================================
+# Network Adequacy Comparison Tool - Configuration
+# ============================================================================
+# All column names, data sources, and behavior are controlled here.
+# No code changes needed when column names or data sources change.
+# ============================================================================
+
+# --- State Filter ---
+state: "TX"
+
+# --- Source: QES Excel Workbook ---
+# Workbook-1 = Network Adequacy summary (QES-set-1)
+# Workbook-2 = Provider detail (QES-set-2)
+qes:
+  workbook1_path: "input/QES_Network_Adequacy.xlsx"
+  workbook1_sheet: "Sheet1"
+  workbook2_path: "input/QES_Providers.xlsx"
+  workbook2_sheet: "Sheet1"
+
+# --- Source: NIQ ---
+# source_type: "excel" | "rds" | "csv" | "mock"
+#   excel -> reads from workbook(s) with sheets for set-1 and set-2
+#   rds   -> queries Amazon RDS
+#   csv   -> reads from CSV files
+#   mock  -> generates synthetic data (also creates QES mock workbooks)
+niq:
+  source_type: "mock"
+
+  # --- Excel source (used when source_type=excel) ---
+  excel:
+    # Option A: Single workbook with two named sheets
+    single_workbook: true
+    workbook_path: "input/NIQ_Data.xlsx"
+    network_adequacy_sheet: "NetworkAdequacy"
+    provider_detail_sheet: "ProviderDetail"
+
+    # Option B: Two separate workbooks (set single_workbook: false)
+    # single_workbook: false
+    # workbook1_path: "input/NIQ_Network_Adequacy.xlsx"
+    # workbook1_sheet: "Sheet1"
+    # workbook2_path: "input/NIQ_Providers.xlsx"
+    # workbook2_sheet: "Sheet1"
+
+  # --- RDS source (used when source_type=rds) ---
+  rds:
+    host: "your-cluster.xxxxxxxxxx.us-east-1.rds.amazonaws.com"
+    port: 3306
+    database: "network_adequacy_db"
+    username: "readonly_user"
+    password_env_var: "NIQ_RDS_PASSWORD"
+    ssl_ca_path: ""
+    engine: "mysql"
+    network_adequacy_query: |
+      SELECT state_code, county_name, specialty_type,
+             provider_cnt, meets_standard_flag, avg_distance, member_count
+      FROM network_adequacy_summary
+      WHERE state_code = :state
+    provider_detail_query: |
+      SELECT state_code, county_name, specialty_type,
+             provider_npi, provider_name, provider_address,
+             provider_city, provider_zip, accepting_patients
+      FROM provider_details
+      WHERE state_code = :state
+
+  # --- CSV source (used when source_type=csv) ---
+  csv:
+    network_adequacy_path: "input/NIQ_Network_Adequacy.csv"
+    provider_detail_path: "input/NIQ_Providers.csv"
+
+# ============================================================================
+# Column Mappings
+# ============================================================================
+# QES and NIQ have DIFFERENT column names. Mappings align them.
+
+# Composite Join Key (order must correspond 1:1)
+key_columns:
+  qes: ["State", "County_Name", "Specialty"]
+  niq: ["state_code", "county_name", "specialty_type"]
+
+# Columns to Compare (diffed between QES and NIQ)
+compare_columns:
+  - qes_col: "Provider_Count"
+    niq_col: "provider_cnt"
+    label: "Provider Count"
+    dtype: "numeric"
+
+  - qes_col: "Meets_Standard"
+    niq_col: "meets_standard_flag"
+    label: "Meets Standard"
+    dtype: "text"
+
+  - qes_col: "Avg_Distance_Miles"
+    niq_col: "avg_distance"
+    label: "Avg Distance (Miles)"
+    dtype: "numeric"
+    tolerance: 0.01
+
+# Additional Display Columns (NOT compared, just shown in results for context)
+# Set qes_col or niq_col to null if column exists in only one dataset.
+additional_result_columns:
+  - qes_col: "Member_Count"
+    niq_col: "member_count"
+    label: "Member Count"
+
+  # - qes_col: "Plan_Type"
+  #   niq_col: null
+  #   label: "Plan Type (QES)"
+
+  # - qes_col: null
+  #   niq_col: "last_refreshed"
+  #   label: "Last Refreshed (NIQ)"
+
+# Result Sheet Column Order
+# Tokens: {keys}, {row_source}, {compare:<label>}, {additional:<label>}, {overall_match}
+# If omitted entirely, a sensible default order is used.
+result_column_order:
+  - "{keys}"
+  - "{row_source}"
+  - "{compare:Provider Count}"
+  - "{additional:Member Count}"
+  - "{compare:Meets Standard}"
+  - "{compare:Avg Distance (Miles)}"
+  - "{overall_match}"
+
+# --- Drill-Down (Clickable Provider Counts) ---
+drilldown:
+  qes_column: "Provider_Count"
+  niq_column: "provider_cnt"
+  qes_provider_keys: ["State", "County_Name", "Specialty"]
+  niq_provider_keys: ["state_code", "county_name", "specialty_type"]
+
+# --- Provider Detail Column Display ---
+provider_display_columns:
+  qes:
+    - "State"
+    - "County_Name"
+    - "Specialty"
+    - "Provider_NPI"
+    - "Provider_Name"
+    - "Provider_Address"
+    - "Provider_City"
+    - "Provider_Zip"
+    - "Accepting_Patients"
+  niq:
+    - "state_code"
+    - "county_name"
+    - "specialty_type"
+    - "provider_npi"
+    - "provider_name"
+    - "provider_address"
+    - "provider_city"
+    - "provider_zip"
+    - "accepting_patients"
+
+# ============================================================================
+# Output Settings
+# ============================================================================
+output:
+  workbook_path: "output/Network_Adequacy_Comparison.xlsx"
+  max_drilldown_sheets: 200
+  sheet_name_max_length: 31
+  freeze_panes: true
+  auto_column_width: true
+  highlight_differences: true
+
+  # Plain text labels (no unicode)
+  labels:
+    match: "MATCH"
+    mismatch: "MISMATCH"
+    warning: "WARNING"
+    overall_match: "MATCH"
+    overall_mismatch: "MISMATCH"
+    overall_qes_only: "QES ONLY"
+    overall_niq_only: "NIQ ONLY"
+    na_qes_only: "N/A - QES Only"
+    na_niq_only: "N/A - NIQ Only"
+    null_vs_value: "NULL vs value"
+
+  colors:
+    header_fill: "1F4E79"
+    header_font: "FFFFFF"
+    match_fill: "C6EFCE"
+    mismatch_fill: "FFC7CE"
+    qes_only_fill: "FCE4D6"
+    niq_only_fill: "D6E4FC"
+    hyperlink_font: "0563C1"
+
+# ============================================================================
+# Mock Data (used only when niq.source_type=mock)
+# ============================================================================
+mock:
+  seed: 42
+  num_counties: 8
+  num_specialties: 6
+  num_providers_range: [3, 25]
+  mismatch_rate: 0.15
+  qes_only_rate: 0.05
+  niq_only_rate: 0.05
