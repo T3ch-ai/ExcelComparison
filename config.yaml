@@ -1,5 +1,5 @@
 # ============================================================================
-# Network Adequacy Comparison Tool - Configuration
+# Network Adequacy Comparison Tool - Configuration (Phase 2)
 # ============================================================================
 # All column names, data sources, and behavior are controlled here.
 # No code changes needed when column names or data sources change.
@@ -8,38 +8,28 @@
 # --- State Filter ---
 state: "TX"
 
-# --- Source: QES Excel Workbook ---
-# Workbook-1 = Network Adequacy summary (QES-set-1)
-# Workbook-2 = Provider detail (QES-set-2)
+# --- Source: QES Data ---
+# source_type: "excel" | "csv"  (default: auto-detect from file extension)
+# Workbook-1 / File-1 = Network Adequacy summary (QES-NetworkAdequacy-1)
+# Workbook-2 / File-2 = Provider detail (QES-NA-Providers-2)
 qes:
+  source_type: "excel"          # "excel" or "csv" (or omit to auto-detect)
   workbook1_path: "input/QES_Network_Adequacy.xlsx"
-  workbook1_sheet: "Sheet1"
+  workbook1_sheet: "Sheet1"     # ignored for CSV
   workbook2_path: "input/QES_Providers.xlsx"
-  workbook2_sheet: "Sheet1"
+  workbook2_sheet: "Sheet1"     # ignored for CSV
 
 # --- Source: NIQ ---
 # source_type: "excel" | "rds" | "csv" | "mock"
-#   excel -> reads from workbook(s) with sheets for set-1 and set-2
-#   rds   -> queries Amazon RDS
-#   csv   -> reads from CSV files
-#   mock  -> generates synthetic data (also creates QES mock workbooks)
 niq:
   source_type: "mock"
 
   # --- Excel source (used when source_type=excel) ---
   excel:
-    # Option A: Single workbook with two named sheets
     single_workbook: true
     workbook_path: "input/NIQ_Data.xlsx"
     network_adequacy_sheet: "NetworkAdequacy"
     provider_detail_sheet: "ProviderDetail"
-
-    # Option B: Two separate workbooks (set single_workbook: false)
-    # single_workbook: false
-    # workbook1_path: "input/NIQ_Network_Adequacy.xlsx"
-    # workbook1_sheet: "Sheet1"
-    # workbook2_path: "input/NIQ_Providers.xlsx"
-    # workbook2_sheet: "Sheet1"
 
   # --- RDS source (used when source_type=rds) ---
   rds:
@@ -51,16 +41,21 @@ niq:
     ssl_ca_path: ""
     engine: "mysql"
     network_adequacy_query: |
-      SELECT state_code, county_name, specialty_type,
-             provider_cnt, meets_standard_flag, avg_distance, member_count
+      SELECT Project, LOB, state, countSSACode, county, zip,
+             specialty_code, specialty_formula, total_members,
+             covered_members, threshold, provider_covering,
+             accurate_covered_members, filing_type,
+             coverage_percentage, coverage_status
       FROM network_adequacy_summary
-      WHERE state_code = :state
+      WHERE state = :state
     provider_detail_query: |
-      SELECT state_code, county_name, specialty_type,
-             provider_npi, provider_name, provider_address,
-             provider_city, provider_zip, accepting_patients
+      SELECT npi, tax_id, specialty_group_code, specialty_group_desc,
+             servicing_state, servicing_county, address, address2,
+             city, state, zip, latitude, longitude, entity_type,
+             facility_name, last_name, first_name, taxonomy,
+             phone, tin, prefix, first, middle, last, suffix, gender
       FROM provider_details
-      WHERE state_code = :state
+      WHERE servicing_state = :state
 
   # --- CSV source (used when source_type=csv) ---
   csv:
@@ -74,83 +69,181 @@ niq:
 
 # Composite Join Key (order must correspond 1:1)
 key_columns:
-  qes: ["State", "County_Name", "Specialty"]
-  niq: ["state_code", "county_name", "specialty_type"]
+  qes: ["State", "CountySSA", "Specialty Group Code"]
+  niq: ["state", "countSSACode", "specialty_code"]
 
 # Columns to Compare (diffed between QES and NIQ)
 compare_columns:
-  - qes_col: "Provider_Count"
-    niq_col: "provider_cnt"
-    label: "Provider Count"
-    dtype: "numeric"
-
-  - qes_col: "Meets_Standard"
-    niq_col: "meets_standard_flag"
-    label: "Meets Standard"
-    dtype: "text"
-
-  - qes_col: "Avg_Distance_Miles"
-    niq_col: "avg_distance"
-    label: "Avg Distance (Miles)"
+  - qes_col: "% members with Access"
+    niq_col: "coverage_percentage"
+    label: "Coverage Percentage"
     dtype: "numeric"
     tolerance: 0.01
+    direction_indicator: true
+
+  - qes_col: "Servicing Providers count"
+    niq_col: "provider_covering"
+    label: "Servicing Providers"
+    dtype: "numeric"
+    tolerance: 0
+
+  - qes_col: "Access Met (Y/N)"
+    niq_col: "coverage_status"
+    label: "Access Met"
+    dtype: "text"
+    value_map:
+      "Y": "Met"
+      "N": "Not Met"
 
 # Additional Display Columns (NOT compared, just shown in results for context)
-# Set qes_col or niq_col to null if column exists in only one dataset.
+#
+# Compact format:  { qes: "QES Column", niq: "NIQ Column" }
+#   - label is auto-derived from qes (or niq if qes is null)
+#   - set qes or niq to null if column exists in only one dataset
+#   - add optional "label:" to override the auto-derived label
+#
+# Verbose format (also supported):
+#   { qes_col: "QES Column", niq_col: "NIQ Column", label: "Display Label" }
+#
 additional_result_columns:
-  - qes_col: "Member_Count"
-    niq_col: "member_count"
-    label: "Member Count"
+  - qes: "Project Name"
+    niq: "Project"
 
-  # - qes_col: "Plan_Type"
-  #   niq_col: null
-  #   label: "Plan Type (QES)"
+  - qes: "County Name"
+    niq: "county"
 
-  # - qes_col: null
-  #   niq_col: "last_refreshed"
-  #   label: "Last Refreshed (NIQ)"
+  - qes: "Specialty Group Name"
+    niq: "specialty_group_name"
+
+  - qes: "County Class (Rural/Metro/Micro/CEAC)"
+    label: "County Class"
+
+  - qes: "Membership Count"
+    niq: "total_members"
+
+  - qes: "Members with Access"
+    niq: "covered_members"
+
+  - qes: "Required Providers count"
+    niq: "threshold"
+    label: "Required Providers"
+
+  - niq: "filing_type"
+    label: "Filing Type (NIQ)"
+
+  - niq: "LOB"
+    label: "LOB (NIQ)"
 
 # Result Sheet Column Order
 # Tokens: {keys}, {row_source}, {compare:<label>}, {additional:<label>}, {overall_match}
-# If omitted entirely, a sensible default order is used.
 result_column_order:
   - "{keys}"
   - "{row_source}"
-  - "{compare:Provider Count}"
-  - "{additional:Member Count}"
-  - "{compare:Meets Standard}"
-  - "{compare:Avg Distance (Miles)}"
+  - "{additional:Project Name}"
+  - "{additional:County Name}"
+  - "{additional:Specialty Group Name}"
+  - "{additional:County Class}"
+  - "{compare:Coverage Percentage}"
+  - "{compare:Servicing Providers}"
+  - "{compare:Access Met}"
+  - "{additional:Membership Count}"
+  - "{additional:Members with Access}"
+  - "{additional:Required Providers}"
+  - "{additional:Filing Type (NIQ)}"
+  - "{additional:LOB (NIQ)}"
   - "{overall_match}"
 
-# --- Drill-Down (Clickable Provider Counts) ---
+# --- Drill-Down (Clickable Difference Cells) ---
 drilldown:
-  qes_column: "Provider_Count"
-  niq_column: "provider_cnt"
-  qes_provider_keys: ["State", "County_Name", "Specialty"]
-  niq_provider_keys: ["state_code", "county_name", "specialty_type"]
+  link_column: "Diff_Coverage Percentage"
+  qes_provider_keys:
+    state: "ServicingState"
+    county: "ServicingCounty"
+    specialty: "Specialty Group Code"
+  niq_provider_keys:
+    state: "servicing_state"
+    county: "servicing_county"
+    specialty: "specialty_group_code"
 
 # --- Provider Detail Column Display ---
 provider_display_columns:
   qes:
-    - "State"
-    - "County_Name"
-    - "Specialty"
-    - "Provider_NPI"
-    - "Provider_Name"
-    - "Provider_Address"
-    - "Provider_City"
-    - "Provider_Zip"
-    - "Accepting_Patients"
+    - "NPI"
+    - "TaxID"
+    - "Specialty Group Code"
+    - "Specialty Group Desc"
+    - "ServicingState"
+    - "ServicingCounty"
+    - "Address"
+    - "City"
+    - "Zip"
+    - "Latitude"
+    - "Longitude"
+    - "EntityType"
+    - "Facility Name"
+    - "Organization"
+    - "lastName"
+    - "FirstName"
+    - "Taxonomy"
+    - "Phone"
+    - "Gender"
+    - "Race"
+    - "Ethnicity"
+    - "Language"
+    - "Board Certified"
+    - "Accepting Patients"
+    - "Contract"
+    - "Source"
   niq:
-    - "state_code"
-    - "county_name"
-    - "specialty_type"
-    - "provider_npi"
-    - "provider_name"
-    - "provider_address"
-    - "provider_city"
-    - "provider_zip"
+    - "npi"
+    - "tax_id"
+    - "specialty_group_code"
+    - "specialty_group_desc"
+    - "servicing_state"
+    - "servicing_county"
+    - "address"
+    - "city"
+    - "zip"
+    - "latitude"
+    - "longitude"
+    - "entity_type"
+    - "facility_name"
+    - "organization"
+    - "last_name"
+    - "first_name"
+    - "taxonomy"
+    - "phone"
+    - "gender"
+    - "race"
+    - "ethnicity"
+    - "language"
+    - "board_certified"
     - "accepting_patients"
+    - "contract"
+    - "source"
+
+# ============================================================================
+# Summary Sheet Configuration
+# ============================================================================
+summary:
+  alignment: "left"
+  npi_columns:
+    qes: "NPI"
+    niq: "npi"
+  serving_columns:
+    qes: "Servicing Providers count"
+    niq: "provider_covering"
+  specialty_desc_columns:
+    qes: "Specialty Group Name"
+    niq: null
+
+# ============================================================================
+# Chunked Loading (for large provider files)
+# ============================================================================
+chunked_loading:
+  enabled: true
+  chunk_size: 50000
+  provider_file_threshold_mb: 100
 
 # ============================================================================
 # Output Settings
@@ -175,6 +268,11 @@ output:
     na_qes_only: "N/A - QES Only"
     na_niq_only: "N/A - NIQ Only"
     null_vs_value: "NULL vs value"
+    higher: "HIGHER"
+    lower: "LOWER"
+    same: "SAME"
+    match_indicator: "Match"
+    no_match_indicator: "Don't Match"
 
   colors:
     header_fill: "1F4E79"
@@ -190,9 +288,14 @@ output:
 # ============================================================================
 mock:
   seed: 42
-  num_counties: 8
-  num_specialties: 6
-  num_providers_range: [3, 25]
-  mismatch_rate: 0.15
+  num_counties: 15
+  num_specialties: 10
+  num_providers_range: [5, 50]
+  mismatch_rate: 0.20
   qes_only_rate: 0.05
   niq_only_rate: 0.05
+  zero_serving_rate: 0.03
+  project_name: "TX_NA_2026"
+  filing_types: ["SBE", "QHP"]
+  lob_types: ["Commercial", "Medicare", "Medicaid"]
+  facility_rate: 0.15
